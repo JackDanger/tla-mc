@@ -675,6 +675,11 @@ fn bound_name(b: &Bound) -> String {
 }
 
 pub fn generate(l: &Loaded, dir: &Path) -> Result<(), String> {
+    generate_as(l, dir, &package_name(l))
+}
+
+/// `generate`, with the package named `tlcgen-<pkg>`.
+pub fn generate_as(l: &Loaded, dir: &Path, pkg: &str) -> Result<(), String> {
     let p = &l.prog;
     let mut pool = HashMap::new();
     let mut i = 0;
@@ -824,7 +829,6 @@ pub fn generate(l: &Loaded, dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir.join(".cargo")).map_err(|e| e.to_string())?;
     std::fs::write(src.join("main.rs"), code).map_err(|e| e.to_string())?;
     let lib = env!("CARGO_MANIFEST_DIR");
-    let pkg = package_name(l);
     std::fs::write(
         dir.join("Cargo.toml"),
         format!(

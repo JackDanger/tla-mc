@@ -2,13 +2,18 @@
 //!
 //!   tla-mc [-workers N] [-engine interp|closure] [-codegen DIR] [-config X.cfg]
 //!          [-metadir DIR] [-checkpoint MIN] [-recover DIR] [-queue-mem MB] [-fpmem MB] X.tla
+//!   tla-mc -version
 //!
-//! Disk: a BFS level (kept serialized) beyond `-queue-mem` (default 256 MB)
-//! spills to the metadir (default `states/<spec>-<time>` beside the spec),
-//! and every `-checkpoint` minutes (default 30; 0 = never) the search is
+//! Disk: a BFS level (kept serialized) beyond `-queue-mem` spills to the
+//! metadir (default `states/<spec>-<time>` beside the spec), and every
+//! `-checkpoint` minutes (default 30; 0 = never) the search is
 //! checkpointed there at a level boundary. `-recover DIR` resumes from
-//! that checkpoint. Past `-fpmem` (default 1024 MB) the seen set's shards
-//! spill to sorted files there too. A finished run removes what it wrote.
+//! that checkpoint. Past `-fpmem` the seen set's shards spill to sorted
+//! files there too. A finished run removes what it wrote. Both default to
+//! an eighth of the memory available when the run starts (Linux:
+//! `MemAvailable`), and no less than 256 MB (`-queue-mem`) and 1024 MB
+//! (`-fpmem`): a fixed 256 MB queue spilled almost every level of a large
+//! run to disk on a machine with hundreds of GB free.
 //!
 //! Invariants, state constraints, deadlock, SYMMETRY, VIEW, and temporal
 //! PROPERTYs in the shapes the gates use (`[][A]_v`, `P ~> Q`,
@@ -206,9 +211,12 @@ fn run(generated: Option<Generated>) -> Result<bool, String> {
     let mut compile = false;
     let mut var_order: Option<String> = None;
     let mut print_var_order = false;
-    let (mut metadir, mut recover, mut checkpoint_min, mut queue_mb): (Option<PathBuf>, bool, f64, u64) = (None, false, 30.0, 256);
+    let share = mem_share_mb();
+    let (mut metadir, mut recover, mut checkpoint_min, mut queue_mb): (Option<PathBuf>, bool, f64, u64) =
+        (None, false, 30.0, share.map_or(256, |m| m.max(256)));
     // TLAMC_FPMEM_MB: the default -fpmem, for forcing spills in tests
-    let mut fp_mb: u64 = std::env::var("TLAMC_FPMEM_MB").ok().and_then(|v| v.parse().ok()).unwrap_or(1024);
+    let mut fp_mb: u64 =
+        std::env::var("TLAMC_FPMEM_MB").ok().and_then(|v| v.parse().ok()).unwrap_or(share.map_or(1024, |m| m.max(1024)));
     let mut lib_dirs: Vec<PathBuf> = std::env::var_os("TLAMC_LIB").map(|v| std::env::split_paths(&v).collect()).unwrap_or_default();
     let mut i = 0;
     while i < args.len() {
@@ -263,6 +271,10 @@ fn run(generated: Option<Generated>) -> Result<bool, String> {
                 codegen_dir = Some(PathBuf::from(&args[i]));
             }
             "-compile" => compile = true,
+            "-version" | "--version" => {
+                println!("tla-mc {}", env!("CARGO_PKG_VERSION"));
+                return Ok(true);
+            }
             a if a.ends_with(".tla") => spec_path = Some(PathBuf::from(a)),
             a => return Err(format!("unknown argument {a}")),
         }
@@ -419,6 +431,14 @@ fn run(generated: Option<Generated>) -> Result<bool, String> {
     Ok(ok)
 }
 
+/// An eighth of the memory available now, in MB (Linux: `MemAvailable`);
+/// None where it cannot be read.
+fn mem_share_mb() -> Option<u64> {
+    let m = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let kb: u64 = m.lines().find(|l| l.starts_with("MemAvailable:"))?.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kb / 1024 / 8)
+}
+
 /// `-compile`: generate the checker, build it in a cache shared by every
 /// spec (the tla-mc library is compiled once, not per spec: a build drops
 /// from ~20 s to ~8 s), keep the binary keyed by the spec's sources, its
@@ -445,7 +465,11 @@ fn compile_and_run(l: &Loaded, args: &[String]) -> Result<bool, String> {
         let t = Instant::now();
         let crate_dir = root.join("gen").join(format!("{pkg}-{key:016x}"));
         let _ = std::fs::remove_dir_all(&crate_dir);
-        codegen::generate(l, &crate_dir)?;
+        // a package per key: parallel builds of one module with different
+        // sources or cfgs share the target dir, and each must copy out its
+        // own binary, not the last one cargo wrote there
+        let name = format!("{pkg}-{key:016x}");
+        codegen::generate_as(l, &crate_dir, &name)?;
         eprintln!("tla-mc: building a checker for {} (cache: {})", l.name, root.display());
         let status = std::process::Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
             .args(["build", "--release", "--quiet"])
@@ -456,7 +480,7 @@ fn compile_and_run(l: &Loaded, args: &[String]) -> Result<bool, String> {
         if !status.success() {
             return Err(format!("-compile: building the checker failed; its crate is in {}", crate_dir.display()));
         }
-        let built = root.join("target/release").join(format!("tlcgen-{pkg}{}", std::env::consts::EXE_SUFFIX));
+        let built = root.join("target/release").join(format!("tlcgen-{name}{}", std::env::consts::EXE_SUFFIX));
         std::fs::create_dir_all(root.join("bin")).map_err(|e| format!("-compile: {e}"))?;
         // copy, then rename into place: a concurrent run never sees half a binary
         let tmp = bin.with_extension(format!("tmp{}", std::process::id()));

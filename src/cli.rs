@@ -428,6 +428,12 @@ fn run(generated: Option<Generated>) -> Result<bool, String> {
         secs,
         out.distinct as f64 / secs
     );
+    // An evaluation or I/O error decided nothing: it must not exit with the
+    // code a violation exits with (12). A queue that filled the disk once
+    // came back as rc 12, indistinguishable from a counterexample by code.
+    if matches!(out.failure, Some(check::Failure::Eval(..))) {
+        return Err(RUN_FAILED.into());
+    }
     Ok(ok)
 }
 
@@ -504,10 +510,15 @@ fn compile_and_run(l: &Loaded, args: &[String]) -> Result<bool, String> {
     }
 }
 
+/// `run`'s error when the search stopped on an evaluation or I/O error it
+/// has already printed: exit 2, as for any error, and print nothing more.
+const RUN_FAILED: &str = "the search stopped on an error";
+
 pub fn main(generated: Option<Generated>) -> ExitCode {
     match run(generated) {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(12),
+        Err(e) if e == RUN_FAILED => ExitCode::from(2),
         Err(e) if e == crate::compile::ASSUME_FALSE => {
             println!("Error: {e}.");
             ExitCode::from(10)

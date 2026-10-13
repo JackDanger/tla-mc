@@ -40,14 +40,19 @@ cached under `~/.cache/tla-mc`), and runs it with the same arguments:
 tla-mc -compile -workers 8 -config MCPaxos.cfg MCPaxos.tla
 ```
 
+On many cores, compile: the interpreter clones shared values as it reads them, and
+at 192 workers it spent most of its time on their reference counts (~850 distinct
+states/s per core on one model, against ~31,000 compiled).
+
 | option | |
 |---|---|
 | `-workers N` | threads (default: all cores) |
 | `-compile` | generate, build (cached) and run a native checker; needs `cargo` |
 | `-lib DIR` | where to find modules not beside the spec, e.g. the [CommunityModules](https://github.com/tlaplus/CommunityModules) `modules/` directory (also `TLAMC_LIB`) |
 | `-metadir DIR`, `-checkpoint MIN`, `-recover DIR` | where state spills and checkpoints go; resume a stopped run |
-| `-fpmem MB`, `-queue-mem MB` | memory for the seen set and the BFS queue before they spill to disk |
+| `-fpmem MB`, `-queue-mem MB` | memory for the seen set and the BFS queue before they spill to disk (default: an eighth of the memory available, at least 1024 / 256 MB) |
 | `-engine interp\|closure` | the evaluator when not compiled |
+| `-version` | print the version |
 | `-codegen DIR` | write the generated checker's crate to `DIR` and stop |
 
 `scripts/pgo-build.sh` adds profile-guided optimization to a compiled checker,
@@ -127,6 +132,10 @@ This is one machine and seven models; the logs are in the results directory, and
   `VIEW` worlds, where counts vary with timing at several workers, TLC's too).
   Run on the published 0.1.0 crate, 2026-10-07:
   [`results/validation-2026-10-07/`](results/validation-2026-10-07/SUMMARY.md).
+  0.1.2 (a cache, memory-default and exit-code fix; no change to evaluation) was
+  re-run on the 343 of those entries that take under 5 s, plus 10 through
+  `-compile`: every verdict the same, and every must-hold and liveness count:
+  [`results/validation-2026-10-12/`](results/validation-2026-10-12/SUMMARY.md).
 - **Its own tests**, several of them checked to fail with the code they guard
   disabled.
 
